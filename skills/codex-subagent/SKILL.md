@@ -9,8 +9,7 @@ Execute targeted user-delegated tasks with Codex cleanly and without unnecessary
 
 ## MCP Reference (`codex-bridge_codex`)
 
-- Eager tools: `codex_status`, `codex_plan`, `codex_run`, `codex_review`.
-- Lazy polling tool: `call_mcp_tool(ServerName="codex-bridge_codex", ToolName="codex_poll", Arguments={"task_id": "<id>", "wait_seconds": 30})`.
+The Antigravity primary agent calls `codex_status`, `codex_plan`, `codex_run`, `codex_review`, and `codex_poll` directly. Use `codex_poll(task_id, wait_seconds=30)` for background work.
 
 ## Step 1: Workspace & Readiness Check
 
@@ -48,7 +47,7 @@ Choose the leanest tool that matches the user's request:
 ## Step 3: Handle Long-Running Tasks (`codex_poll`)
 
 If `codex_plan`, `codex_run` (including `async_mode: true`), or `codex_review` returns `status == "running"` with a `task_id`:
-1. Call `call_mcp_tool(ServerName="codex-bridge_codex", ToolName="codex_poll", Arguments={"task_id": "<task_id>", "wait_seconds": 30})`.
+1. Call `codex_poll(task_id="<task_id>", wait_seconds=30)`.
 2. Repeat while `status == "running"` (giving the user concise progress updates if needed) until `status` is `"completed"`, `"failed"`, or `"error"`.
 
 ## Step 4: Verify & Translate Back to the User

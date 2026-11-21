@@ -1,0 +1,10 @@
+{
+  "codex-orchestrator": {
+    "PreInvocation": [
+      {
+        "command": "python3 scripts/orchestrator_hook.py",
+        "timeout": 5
+      }
+    ]
+  }
+}

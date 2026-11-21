@@ -23,7 +23,7 @@
           "eager": true
         },
         "codex_poll": {
-          "eager": false
+          "eager": true
         }
       }
     }

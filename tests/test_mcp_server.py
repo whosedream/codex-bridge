@@ -126,11 +126,11 @@ class TestMcpServer(unittest.TestCase):
             result = init_resp["result"]
             self.assertEqual(result["protocolVersion"], "2024-11-05")
             self.assertEqual(result["capabilities"], {"tools": {}})
-            self.assertEqual(result["serverInfo"], {"name": "codex-bridge", "version": "0.1.0"})
+            self.assertEqual(result["serverInfo"], {"name": "codex-bridge", "version": "0.4.0"})
             instructions = result.get("instructions", "")
             self.assertIn("codex_plan", instructions)
             self.assertIn("codex_run", instructions)
-            self.assertIn("Mode A", instructions)
+            self.assertIn("primary agent dispatches directly", instructions)
 
             client.send_notification("notifications/initialized")
 

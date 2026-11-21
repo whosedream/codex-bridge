@@ -44,6 +44,16 @@ def resolve_codex_bin() -> str | None:
             return None
         return shutil.which(override)
 
+    desktop_bin = os.environ.get("CODEX_BRIDGE_DESKTOP_BIN", "").strip()
+    if desktop_bin:
+        binaries = (
+            path for path in Path(desktop_bin).expanduser().glob("*/codex.exe")
+            if path.is_file() and os.access(path, os.X_OK)
+        )
+        latest = max(binaries, key=lambda path: path.parent.stat().st_mtime_ns, default=None)
+        if latest is not None:
+            return str(latest)
+
     which_path = shutil.which("codex")
     if which_path:
         return which_path

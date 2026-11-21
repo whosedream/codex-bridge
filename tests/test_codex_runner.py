@@ -73,6 +73,22 @@ class TestRunnerFoundation(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CODEX_BIN": "/nonexistent/codex-xyz"}, clear=False):
             self.assertIsNone(resolve_codex_bin())
 
+    def test_desktop_binary_can_move_between_version_directories(self) -> None:
+        desktop_dir = self.tmpdir / "desktop"
+        binaries = []
+        for timestamp, version in enumerate(("old", "new"), start=1):
+            binary = desktop_dir / version / "codex.exe"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            binary.chmod(0o755)
+            os.utime(binary.parent, (timestamp, timestamp))
+            binaries.append(binary)
+
+        with mock.patch.dict(os.environ, {"CODEX_BIN": "", "CODEX_BRIDGE_DESKTOP_BIN": str(desktop_dir)}):
+            self.assertEqual(resolve_codex_bin(), str(binaries[1]))
+            binaries[1].unlink()
+            self.assertEqual(resolve_codex_bin(), str(binaries[0]))
+
     def test_check_status_detects_custom_provider_without_oauth_login(self) -> None:
         codex_home = self.tmpdir / "codex_home"
         codex_home.mkdir()

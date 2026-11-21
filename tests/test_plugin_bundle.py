@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import stat
+import subprocess
 import sys
 import unittest
 import xml.etree.ElementTree as ET
@@ -157,7 +158,7 @@ class TestPluginBundle(unittest.TestCase):
         self.assertEqual(tools.get("codex_plan"), {"eager": True})
         self.assertEqual(tools.get("codex_run"), {"eager": True})
         self.assertEqual(tools.get("codex_review"), {"eager": True})
-        self.assertEqual(tools.get("codex_poll"), {"eager": False})
+        self.assertEqual(tools.get("codex_poll"), {"eager": True})
 
         server_tool_names = {tool["name"] for tool in codex_mcp_server._build_tool_definitions()}
         self.assertEqual(set(tools.keys()), server_tool_names)
@@ -185,17 +186,37 @@ class TestPluginBundle(unittest.TestCase):
             self.assertEqual(meta.get("name"), skill_dir.name)
             self.assertTrue(str(meta.get("description", "")).strip())
 
-    def test_worker_agent_frontmatter_and_tools(self) -> None:
-        agent_path = REPO_ROOT / "agents" / "codex-worker.md"
-        self.assertTrue(agent_path.is_file(), "Missing agents/codex-worker.md")
-        meta = _parse_yaml_frontmatter(agent_path.read_text(encoding="utf-8"))
+    def test_worker_is_dispatched_by_primary_agent(self) -> None:
+        self.assertFalse(list((REPO_ROOT / "agents").glob("*.md")))
+        instructions = codex_mcp_server.SERVER_INSTRUCTIONS
+        self.assertIn("primary agent dispatches directly", instructions)
+        self.assertIn("codex_run", instructions)
+        self.assertIn("codex_poll", instructions)
+        self.assertIn("model=gpt-6.2-sol", instructions)
+        self.assertIn("codex-bridge_codex-wsl", instructions)
 
-        self.assertEqual(meta.get("name"), "codex-worker")
-        self.assertTrue(str(meta.get("description", "")).strip())
-        self.assertIs(meta.get("subagent"), True)
-        self.assertIs(meta.get("mainAgent"), False)
-        self.assertIs(meta.get("inheritMcp"), True)
-        self.assertEqual(meta.get("tools"), ["read_file", "call_mcp_tool", "send_message"])
+    def test_orchestrator_hook_only_injects_at_orchestrator_turn_start(self) -> None:
+        hooks = json.loads((REPO_ROOT / "hooks.json").read_text(encoding="utf-8"))
+        cfg = hooks["codex-orchestrator"]["PreInvocation"][0]
+        script = REPO_ROOT / cfg["command"].split()[1]
+
+        for model, invocation, active in (
+            ("gemini-pro-orchestrator", 0, True),
+            ("Orchestrator (Neon)", 0, True),
+            ("gemini-pro-orchestrator", 1, False),
+            ("gemini-4-neon-medium", 0, False),
+        ):
+            with self.subTest(model=model, invocation=invocation):
+                proc = subprocess.run(
+                    [sys.executable, str(script)],
+                    input=json.dumps({"modelName": model, "invocationNum": invocation}),
+                    text=True, capture_output=True, check=True,
+                )
+                output = json.loads(proc.stdout)
+                self.assertEqual(bool(output.get("injectSteps")), active)
+                if active:
+                    self.assertIn("model=gpt-6.2-sol", proc.stdout)
+                    self.assertIn("codex_poll", proc.stdout)
 
     def test_scripts_have_executable_permissions(self) -> None:
         for script_name in ("codex_mcp_server.py", "codex_runner.py"):
@@ -229,7 +250,7 @@ class TestPluginBundle(unittest.TestCase):
         for doc_term in (
             "CODEX_BIN",
             "CODEX_BRIDGE_ALLOW_DANGER_SANDBOX",
-            "agy plugin install https://github.com/ballShell/codex-bridge",
+            "agy plugin install https://github.com/whosedream/codex-bridge",
             "MIT License",
             "README.zh-CN.md",
         ):

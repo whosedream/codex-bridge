@@ -9,8 +9,7 @@ Guide heavy engineering tasks from human intent to verified implementation using
 
 ## MCP Reference (`codex-bridge_codex`)
 
-- Eager tools (exposed directly as `mcp_codex-bridge_codex_<tool>` or via `call_mcp_tool`): `codex_status`, `codex_plan`, `codex_run`, `codex_review`.
-- Lazy polling tool: `call_mcp_tool(ServerName="codex-bridge_codex", ToolName="codex_poll", Arguments={"task_id": "<id>", "wait_seconds": 30})`.
+The Antigravity primary agent calls `codex_status`, `codex_plan`, `codex_run`, `codex_review`, and `codex_poll` directly. Use `codex_poll(task_id, wait_seconds=30)` for background work.
 
 ## Step 1: Preflight & Workspace Guard
 
@@ -57,7 +56,7 @@ For Phase 1, instruct Codex to stay read-only and output: proposed architecture/
    - `cwd` (required): validated absolute path
    - Optional: `model`, `reasoning_effort` (`low` | `medium` | `high` | `xhigh`), `images`, `wait_seconds` (`0..600`, default `120`)
    *(Subprocess safety: `codex_plan` always enforces `-s read-only`.)*
-2. **If `status == "running"`:** Poll with `codex_poll` (`task_id`, optional `wait_seconds`, default `30`) via `call_mcp_tool` until `status` is `"completed"`, `"failed"`, or `"error"`. Give the user a short status update if multiple polls are needed.
+2. **If `status == "running"`:** Poll with `codex_poll` (`task_id`, optional `wait_seconds`, default `30`) until `status` is `"completed"`, `"failed"`, or `"error"`. Give the user a short status update if multiple polls are needed.
 3. **If `status == "failed"` or `"error"`:** Inspect `error` / `errors`, run `codex_status` if auth/binary-related, and report the blocker clearly without dumping raw JSON.
 4. **Capture `session_id`:** Save `session_id` from the completed `codex_plan` payload for Phase 2 continuity.
 
@@ -79,7 +78,7 @@ Translate `summary` into clear, structured language for the user (never dump raw
    - `session_id`: `session_id` captured from `codex_plan`
    - `sandbox`: `"workspace-write"` (never `"danger-full-access"` unless `CODEX_BRIDGE_ALLOW_DANGER_SANDBOX=1` is active and explicitly requested)
    - Optional: `model`, `reasoning_effort`, `images`, `async_mode` (`false` by default), `wait_seconds` (`0..600`, default `120`)
-2. **If `status == "running"`:** Poll `codex_poll` via `call_mcp_tool` with `task_id` until `status` is `"completed"`, `"failed"`, or `"error"`.
+2. **If `status == "running"`:** Poll `codex_poll` with `task_id` until `status` is `"completed"`, `"failed"`, or `"error"`.
 3. **Resume Failure Fallback (`resume_failed: true`):**
    - If `codex_run` returns `status == "failed"` and `resume_failed: true` (inspect `hint` and `error`), immediately retry with a **fresh** `codex_run` **omitting `session_id`**, embedding the full approved plan summary, user adjustments, constraints, and verification criteria directly in `prompt`.
 

@@ -26,18 +26,20 @@ from codex_runner import (  # noqa: E402
     check_status,
 )
 
-SERVER_INFO = {"name": "codex-bridge", "version": "0.1.0"}
+SERVER_INFO = {"name": "codex-bridge", "version": "0.4.0"}
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL_VERSION = "2025-03-26"
 
 SERVER_INSTRUCTIONS = (
-    "Bridge to OpenAI Codex CLI. Act as a clear translator between the user and Codex "
-    "without leaking raw internal commands. Use Mode A by default for multi-step work: "
-    "run codex_plan (read-only) first, present the plan for explicit user approval, then "
-    "execute with codex_run passing session_id (falling back to a fresh codex_run with "
-    "plan context if resume_failed is true). For quick single-step tasks, run codex_run "
-    "directly; use codex_poll for async_mode=True or timed-out running tasks; use "
-    "codex_review for read-only reviews; or use an ad-hoc subagent for isolated workflows."
+    "The Antigravity primary agent dispatches directly to OpenAI Codex CLI with codex_run. "
+    "In Orchestrator mode this is the default for code implementation and test execution; "
+    "use model=gpt-6.2-sol unless the user specifies another model. "
+    "When both Codex Bridge endpoints are installed in WSL, route POSIX absolute paths to "
+    "codex-bridge_codex-wsl and Windows paths to codex-bridge_codex. Keep each task on its endpoint. "
+    "Pass async_mode=true for background work and poll codex_poll with the returned task_id "
+    "until the task finishes. Use codex_plan for a read-only proposal and codex_review for a "
+    "read-only code review. Pass session_id to codex_run to continue in the same workspace. "
+    "Return the verified result to the user in the primary conversation."
 )
 
 JSONRPC_PARSE_ERROR = -32700
@@ -126,7 +128,7 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "codex_run",
             "description": (
-                "Execute a fresh or resumed Codex task in the workspace. Pass session_id to "
+                "Dispatch a fresh or resumed Codex worker from the primary conversation. Pass session_id to "
                 "resume an approved codex_plan session (Mode A step 2). Returns summary, "
                 "session_id, changed_files, diff_stat, and resume_failed/hint on resume errors."
             ),
