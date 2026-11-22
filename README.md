@@ -6,7 +6,13 @@ Antigravity delegates implementation and tests directly to the local OpenAI Code
 
 ## Automatic delegation in Orchestrator
 
-Select **Orchestrator** in Antigravity and describe the implementation and tests you want. The planner defines the work and acceptance criteria. In the same conversation, the execution phase calls `codex_run` with `model: "gpt-6.2-sol"` and `async_mode: true`, then uses `codex_poll` to collect the result. Antigravity reviews the changes and test output. The bridge uses direct MCP calls for dispatch and polling. No Gemini subagent is started.
+Select **Orchestrator** in Antigravity and describe the work. The planner defines the scope and the acceptance suite. It calls `codex_run` directly with `model: "gpt-6.2-sol"` and `async_mode: true`. The worker writes a focused regression, observes the expected failure, makes the smallest fix, and runs the test again along with affected regressions. Antigravity calls `codex_review` for the task's diff in a fresh read-only Codex session.
+
+The host independently runs the agreed acceptance suite once on the final code, including authorized socket, GPU, or network checks that need the host. Run the full suite alone if it covers the focused checks. Only rerun relevant checks after a code change or to diagnose a failure. Report worker tests, host acceptance, and review findings separately.
+
+Dispatch background work once and keep its `task_id`. Wait for a client completion notification when available. Otherwise call `codex_poll` without `wait_seconds` to wait up to 300 seconds, or set it to 600 for a longer wait. Shorter waits and 0 for immediate status remain available. The poll returns as soon as the task finishes. If it returns `running`, keep waiting on the same ID.
+
+Terminal receipts include a summary, the total changed-file count, a preview of up to 20 paths, a short diff stat, and worker verification commands and outcomes. They also report failures or unverified checks, elapsed time, and token usage when the CLI provides it. Historical dirty files appear as counts. Read the local JSON at `details_path` for full lists, verification details, and paths to the Codex stdout and stderr logs.
 
 A prompt such as “Fix the zero-duration edge case and run the focused tests” is enough. An explicit worker model or routing request overrides the default. In other Antigravity modes, ask it to hand the task to Codex. You can also request read-only planning or code review, and resume a task with its Codex `session_id`.
 
@@ -62,7 +68,7 @@ Install the plugin in both environments, then edit only the installed WSL `mcp_c
 
 ## Verify a run
 
-Ask Orchestrator to fix a small issue and run its tests in a scratch repository. The conversation trace should show `codex_run` followed by `codex_poll`. Check the changed files and actual test output before accepting the result.
+Ask Orchestrator to fix a small issue and run its tests in a scratch repository. The trace should show `codex_run`, polling, and a separate `codex_review`. Check that the implementation recorded the expected red test and a passing rerun, and that the review has its own session and covers only the task's diff.
 
 Keep machine-specific settings, API keys, Codex login caches such as `auth.json`, and session or task logs in your local installation. Leave `CODEX_BRIDGE_ALLOW_DANGER_SANDBOX` unset for the usual sandboxed setup.
 

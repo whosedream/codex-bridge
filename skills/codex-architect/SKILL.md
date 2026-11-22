@@ -9,7 +9,7 @@ Guide heavy engineering tasks from human intent to verified implementation using
 
 ## MCP Reference (`codex-bridge_codex`)
 
-The Antigravity primary agent calls `codex_status`, `codex_plan`, `codex_run`, `codex_review`, and `codex_poll` directly. Use `codex_poll(task_id, wait_seconds=30)` for background work.
+The Antigravity primary agent calls `codex_status`, `codex_plan`, `codex_run`, `codex_review`, and `codex_poll` directly. When a tool returns `running`, keep its `task_id`. Wait for a completion notification if the client provides one for that task. Otherwise call `codex_poll(task_id="<task_id>")` for the 300-second default, set `wait_seconds=600` for longer tasks, or use a shorter value, including `0` for immediate status. Keep waiting on the same ID after `running`. Report completion, failure, or a decision the user needs to make.
 
 ## Step 1: Preflight & Workspace Guard
 
@@ -56,7 +56,7 @@ For Phase 1, instruct Codex to stay read-only and output: proposed architecture/
    - `cwd` (required): validated absolute path
    - Optional: `model`, `reasoning_effort` (`low` | `medium` | `high` | `xhigh`), `images`, `wait_seconds` (`0..600`, default `120`)
    *(Subprocess safety: `codex_plan` always enforces `-s read-only`.)*
-2. **If `status == "running"`:** Poll with `codex_poll` (`task_id`, optional `wait_seconds`, default `30`) until `status` is `"completed"`, `"failed"`, or `"error"`. Give the user a short status update if multiple polls are needed.
+2. **If `status == "running"`:** Follow the notification or long-poll procedure above using this task ID.
 3. **If `status == "failed"` or `"error"`:** Inspect `error` / `errors`, run `codex_status` if auth/binary-related, and report the blocker clearly without dumping raw JSON.
 4. **Capture `session_id`:** Save `session_id` from the completed `codex_plan` payload for Phase 2 continuity.
 
@@ -73,25 +73,25 @@ Translate `summary` into clear, structured language for the user (never dump raw
 ## Step 6: Phase 2 — Resumed Execution (`codex_run`)
 
 1. Once approved, call `codex_run` with:
-   - `prompt`: confirm plan approval, include any user adjustments, and tell Codex to implement and run verification checks
+   - `prompt`: include user adjustments. For code changes, ask Codex to run a focused regression red on the original code, make the smallest change, run it green, and run affected regression tests. Ask for actual commands and outcomes.
    - `cwd`: same absolute workspace path
    - `session_id`: `session_id` captured from `codex_plan`
    - `sandbox`: `"workspace-write"` (never `"danger-full-access"` unless `CODEX_BRIDGE_ALLOW_DANGER_SANDBOX=1` is active and explicitly requested)
-   - Optional: `model`, `reasoning_effort`, `images`, `async_mode` (`false` by default), `wait_seconds` (`0..600`, default `120`)
-2. **If `status == "running"`:** Poll `codex_poll` with `task_id` until `status` is `"completed"`, `"failed"`, or `"error"`.
+   - Dispatch background work once with `async_mode=true`. Optional: `model`, `reasoning_effort`, `images`, `wait_seconds` (`0..600`, default `120` for a synchronous call)
+2. **If `status == "running"`:** Follow the notification or long-poll procedure above using this task ID.
 3. **Resume Failure Fallback (`resume_failed: true`):**
    - If `codex_run` returns `status == "failed"` and `resume_failed: true` (inspect `hint` and `error`), immediately retry with a **fresh** `codex_run` **omitting `session_id`**, embedding the full approved plan summary, user adjustments, constraints, and verification criteria directly in `prompt`.
 
 ## Step 7: Inspect, Sanity-Check, and Summarize
 
 1. Inspect the completed `codex_run` payload:
-   - `changed_files`: exact files created, modified, or deleted by Codex
-   - `pre_existing_dirty_files`: dirty files that existed before Codex ran (do not attribute these to Codex)
-   - `diff_stat`: concise per-file line delta
-2. Use `read_file` to inspect key changed files, and run a quick sanity check or test suite if Codex could not verify everything or if final verification evidence is missing.
-3. Optionally run `codex_review(cwd="<abs_cwd>", mode="uncommitted")` on high-risk changes before reporting.
+   - `changed_files` and `diff_stat`: bounded descriptions of the changes attributed to the worker
+   - `verification` and `unverified`: observed commands and outcomes, and checks still open
+   - `details_path`: local full lists, attribution of historical changes, and logs. Read it as needed.
+2. The host independently runs the agreed acceptance suite once against the final code. Include authorized socket, GPU, or network checks that need the host. If the full suite covers focused checks, run the full suite alone. Only rerun relevant checks to diagnose a failure or after code changes.
+3. For code changes, call `codex_review` for the task diff in a fresh read-only session. Provide the exact task scope, and collect the findings before reporting.
 4. Report concisely in the user's language:
    - **What changed** (files and behavioral summary)
    - **Why** (key design decisions)
-   - **Verification** (observed test/command results and manual file checks)
+   - **Verification** (report worker tests, host acceptance, and review findings separately)
    - **Open items / next steps** (only if any remain)

@@ -9,7 +9,7 @@ Execute targeted user-delegated tasks with Codex cleanly and without unnecessary
 
 ## MCP Reference (`codex-bridge_codex`)
 
-The Antigravity primary agent calls `codex_status`, `codex_plan`, `codex_run`, `codex_review`, and `codex_poll` directly. Use `codex_poll(task_id, wait_seconds=30)` for background work.
+The Antigravity primary agent calls `codex_status`, `codex_plan`, `codex_run`, `codex_review`, and `codex_poll` directly.
 
 ## Step 1: Workspace & Readiness Check
 
@@ -30,6 +30,7 @@ Choose the leanest tool that matches the user's request:
   - `prompt` (required), `cwd` (required)
   - `sandbox`: `"workspace-write"` (default) or `"read-only"` (never `"danger-full-access"` unless `CODEX_BRIDGE_ALLOW_DANGER_SANDBOX=1` is set and the user explicitly requested it)
   - Optional: `model`, `reasoning_effort`, `images`, `async_mode` (`false` by default), `wait_seconds` (`0..600`, default `120`)
+- For code changes, have the worker run a focused regression red on the original code, make the smallest change, run it green, and run affected regression tests. Ask for actual commands, outcomes, and unverified checks.
 - **Safety Brake:** If a direct edit request is genuinely destructive, ambiguous in risky ways, or unexpectedly spans many files, switch to `codex_plan` first (or ask 1 crisp question) instead of mutating blindly.
 
 ### C. Multi-Turn Follow-Up -> `codex_run` with `session_id`
@@ -46,13 +47,12 @@ Choose the leanest tool that matches the user's request:
 
 ## Step 3: Handle Long-Running Tasks (`codex_poll`)
 
-If `codex_plan`, `codex_run` (including `async_mode: true`), or `codex_review` returns `status == "running"` with a `task_id`:
-1. Call `codex_poll(task_id="<task_id>", wait_seconds=30)`.
-2. Repeat while `status == "running"` (giving the user concise progress updates if needed) until `status` is `"completed"`, `"failed"`, or `"error"`.
+For background execution, call `codex_run(async_mode=true)` once. If a tool returns `running`, keep that `task_id`. If the client provides a completion notification for that task, wait for it. Otherwise call `codex_poll(task_id="<task_id>")` for the 300-second default or set `wait_seconds=600` for a longer wait. Use an explicit shorter value for a short wait or `0` for immediate status. Continue waiting on the same ID after `running`. Report completion, failure, or a decision the user needs to make.
 
 ## Step 4: Verify & Translate Back to the User
 
 Never dump raw JSON or JSONL logs. Present results cleanly in the **user's own language**:
-- **For `codex_run`:** Inspect `changed_files`, `pre_existing_dirty_files` (do not attribute untouched dirty files to Codex), and `diff_stat`. Read key modified files or run a quick sanity check if needed, then summarize what changed, verification results, and `session_id` readiness for follow-ups.
+- **For `codex_run`:** Use `changed_files`, `diff_stat`, `verification`, and `unverified`. Historical dirty changes are counted. Use `details_path` if you need a full list of changes, attribution, or logs.
+- **For code changes:** Run the agreed acceptance suite independently in the host once on the final code, including authorized socket, GPU, or network checks that need the host. If the full suite covers the focused checks, run the full suite alone. Only rerun relevant checks to diagnose a failure or after code changes. Call `codex_review` for the task diff in a fresh read-only session. Report worker tests, host acceptance, and review findings separately.
 - **For `codex_review`:** Group findings by severity (critical/bugs, behavioral/edge-case risks, minor improvements) with exact file references from `summary`, spot-checking flagged files with `read_file` when helpful.
 - **For `codex_plan`:** Summarize Codex's findings or proposal clearly and ask whether to proceed with implementation if edits are warranted.

@@ -26,20 +26,30 @@ from codex_runner import (  # noqa: E402
     check_status,
 )
 
-SERVER_INFO = {"name": "codex-bridge", "version": "0.4.0"}
+SERVER_INFO = {"name": "codex-bridge", "version": "0.6.0"}
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL_VERSION = "2025-03-26"
 
 SERVER_INSTRUCTIONS = (
     "The Antigravity primary agent dispatches directly to OpenAI Codex CLI with codex_run. "
-    "In Orchestrator mode this is the default for code implementation and test execution; "
-    "use model=gpt-6.2-sol unless the user specifies another model. "
+    "In Orchestrator mode send code implementation and development tests to gpt-6.2-sol "
+    "unless the user specifies another model. The worker runs the focused regression red, "
+    "makes the smallest fix, then runs it green and checks affected regressions. "
+    "The host independently runs the agreed acceptance suite once against the final code, "
+    "including authorized socket, GPU, or network checks that need the host. "
+    "If the full suite covers the focused tests, just run the full suite. Only rerun "
+    "relevant checks to diagnose a failure or after code changes. Dispatch codex_review "
+    "for the task's diff in a fresh read-only session and report review and tests separately. "
     "When both Codex Bridge endpoints are installed in WSL, route POSIX absolute paths to "
     "codex-bridge_codex-wsl and Windows paths to codex-bridge_codex. Keep each task on its endpoint. "
-    "Pass async_mode=true for background work and poll codex_poll with the returned task_id "
-    "until the task finishes. Use codex_plan for a read-only proposal and codex_review for a "
-    "read-only code review. Pass session_id to codex_run to continue in the same workspace. "
-    "Return the verified result to the user in the primary conversation."
+    "Dispatch background work once with async_mode=true and keep its task_id. If the client "
+    "delivers completion notifications for that task ID, wait for one. Otherwise call "
+    f"codex_poll with the same task_id and omit wait_seconds to wait up to {DEFAULT_POLL_WAIT_SECONDS} seconds. "
+    f"Set {MAX_WAIT_SECONDS} for longer waits. Set 0 for immediate status. "
+    "After a running result, keep waiting without redispatching or reporting unchanged status. "
+    "Report completion, failure, or a decision the user needs to make. Read details_path only "
+    "when the compact receipt is insufficient. Use codex_plan for a read-only proposal. "
+    "Pass session_id to codex_run for new follow-up work."
 )
 
 JSONRPC_PARSE_ERROR = -32700
@@ -186,8 +196,9 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "codex_poll",
             "description": (
-                "Poll a background or timed-out Codex task by task_id, optionally waiting up "
-                "to wait_seconds for completion."
+                "Wait for the existing task ID to finish. The call returns on completion or timeout. "
+                "Keep waiting on the same ID after a running result. Terminal receipts are compact and "
+                "link to complete file lists, verification details, and logs via details_path."
             ),
             "inputSchema": {
                 "type": "object",
@@ -201,7 +212,10 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
                         "minimum": 0,
                         "maximum": MAX_WAIT_SECONDS,
                         "default": DEFAULT_POLL_WAIT_SECONDS,
-                        "description": "Maximum seconds to wait for completion before returning current status.",
+                        "description": (
+                            f"Omit for {DEFAULT_POLL_WAIT_SECONDS} seconds. Use {MAX_WAIT_SECONDS} for longer "
+                            "tasks, a shorter value for a short wait, or 0 for immediate status."
+                        ),
                     },
                 },
                 "required": ["task_id"],
@@ -211,8 +225,9 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "codex_review",
             "description": (
-                "Run a read-only Codex code review against uncommitted changes, a base branch, "
-                "a specific commit, or a custom review prompt."
+                "Start a fresh, read-only Codex session for independent code review. "
+                "Review uncommitted changes, a base branch, a specific commit, or a custom scope. "
+                "For a completed implementation task, identify only that task's diff in the focus prompt."
             ),
             "inputSchema": {
                 "type": "object",

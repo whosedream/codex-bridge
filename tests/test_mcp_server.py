@@ -126,7 +126,7 @@ class TestMcpServer(unittest.TestCase):
             result = init_resp["result"]
             self.assertEqual(result["protocolVersion"], "2024-11-05")
             self.assertEqual(result["capabilities"], {"tools": {}})
-            self.assertEqual(result["serverInfo"], {"name": "codex-bridge", "version": "0.4.0"})
+            self.assertEqual(result["serverInfo"], {"name": "codex-bridge", "version": "0.6.0"})
             instructions = result.get("instructions", "")
             self.assertIn("codex_plan", instructions)
             self.assertIn("codex_run", instructions)
@@ -148,6 +148,8 @@ class TestMcpServer(unittest.TestCase):
             self.assertEqual(by_name["codex_plan"]["inputSchema"]["required"], ["prompt", "cwd"])
             self.assertEqual(by_name["codex_run"]["inputSchema"]["required"], ["prompt", "cwd"])
             self.assertEqual(by_name["codex_poll"]["inputSchema"]["required"], ["task_id"])
+            wait_schema = by_name["codex_poll"]["inputSchema"]["properties"]["wait_seconds"]
+            self.assertEqual([wait_schema[key] for key in ("minimum", "default", "maximum")], [0, 300, 600])
             self.assertEqual(by_name["codex_review"]["inputSchema"]["required"], ["cwd"])
             self.assertEqual(
                 by_name["codex_run"]["inputSchema"]["properties"]["sandbox"]["enum"],
@@ -288,7 +290,7 @@ class TestMcpServer(unittest.TestCase):
 
             poll_res, poll_payload = client.call_tool(
                 "codex_poll",
-                {"task_id": task_id, "wait_seconds": 5},
+                {"task_id": task_id},
             )
             self.assertFalse(poll_res["isError"])
             self.assertEqual(poll_payload["status"], "completed")

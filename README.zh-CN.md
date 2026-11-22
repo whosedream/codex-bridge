@@ -6,7 +6,13 @@ Antigravity 把代码实现和测试直接派给本机的 OpenAI Codex CLI。Cod
 
 ## Orchestrator 自动派工
 
-在 Antigravity 里选 **Orchestrator**，直接描述要改的代码和要跑的测试。Orchestrator 负责拆任务、定义验收条件。执行阶段在同一对话调用 `codex_run`，传入 `model: "gpt-6.2-sol"` 和 `async_mode: true`，再通过 `codex_poll` 收回结果。Antigravity 复核改动和测试输出。整个过程通过 MCP 直接派工和轮询，Gemini 子代理调用为零。
+在 Antigravity 里选 **Orchestrator**，直接描述要改的代码。主代理负责拆任务、确定验收套件，并在同一对话直接调用 `codex_run`，传入 `model: "gpt-6.2-sol"` 和 `async_mode: true`。Worker 先在原实现上用针对性测试跑红，再做最小修改，跑绿新增用例和受影响的回归。主代理调用 `codex_review`，用新的只读 Codex 会话审查本次 diff。
+
+宿主对最终代码独立跑一次约定的验收套件，包含需要宿主环境且已获授权的 socket、GPU 或联网检查。完整套件包含专项用例时只跑完整套件。只有诊断失败或代码变化后才重跑相关检查。分别汇报 Worker 测试、宿主验收和审查结论。
+
+后台任务派发一次后沿用 `task_id`。客户端能通知该任务完成时等通知。否则调用 `codex_poll`，省略 `wait_seconds` 默认最多等 300 秒，较长任务可设 600 秒。仍可短等或用 0 立即查状态。任务提前结束时立即返回。收到 `running` 就继续用同一个 ID 等待。
+
+完成回执包含摘要、变更文件总数、最多 20 个路径的预览、简短的 diff 统计和 Worker 的验证命令与结果。回执还记录失败或未验证项、耗时和 CLI 提供的 token 用量。历史脏文件只显示数量。按需从 `details_path` 指向的本地 JSON 查看完整清单、验证详情和 Codex 日志路径。
 
 例如，直接说「修复零时长边界并运行定向测试」即可。你也可以显式指定其他 worker 模型或执行方式。在其他 Antigravity 模式里，可以说「把这个任务交给 Codex」。插件还支持只读规划、代码审查和用 `session_id` 续跑。
 
@@ -62,7 +68,7 @@ agy plugin install https://github.com/whosedream/codex-bridge
 
 ## 验证一次派工
 
-选一个临时仓库，让 Orchestrator 修个小问题并跑测试。对话轨迹中应看到 `codex_run` 和后续的 `codex_poll`。验收时核对实际改动文件和测试输出。
+选一个临时仓库，让 Orchestrator 修个小问题并跑测试。对话轨迹中应看到 `codex_run`、轮询和独立的 `codex_review`。核对实现回执里的红测和绿测、不同的审查会话 ID，以及审查覆盖的改动范围。
 
 机器专用配置、API 密钥、`auth.json` 等登录缓存，以及任务和会话日志都留在本机。日常使用保留默认沙盒，`CODEX_BRIDGE_ALLOW_DANGER_SANDBOX` 留空即可。
 

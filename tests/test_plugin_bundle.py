@@ -192,10 +192,13 @@ class TestPluginBundle(unittest.TestCase):
         self.assertIn("primary agent dispatches directly", instructions)
         self.assertIn("codex_run", instructions)
         self.assertIn("codex_poll", instructions)
-        self.assertIn("model=gpt-6.2-sol", instructions)
+        self.assertIn("gpt-6.2-sol", instructions)
         self.assertIn("codex-bridge_codex-wsl", instructions)
+        self.assertIn("worker runs the focused regression red", instructions)
+        self.assertIn("host independently runs the agreed acceptance suite once", instructions)
+        self.assertIn("in a fresh read-only session", instructions)
 
-    def test_orchestrator_hook_only_injects_at_orchestrator_turn_start(self) -> None:
+    def test_orchestrator_hook_injects_scoped_guidance_at_turn_start(self) -> None:
         hooks = json.loads((REPO_ROOT / "hooks.json").read_text(encoding="utf-8"))
         cfg = hooks["codex-orchestrator"]["PreInvocation"][0]
         script = REPO_ROOT / cfg["command"].split()[1]
@@ -204,7 +207,7 @@ class TestPluginBundle(unittest.TestCase):
             ("gemini-pro-orchestrator", 0, True),
             ("Orchestrator (Neon)", 0, True),
             ("gemini-pro-orchestrator", 1, False),
-            ("gemini-4-neon-medium", 0, False),
+            ("gemini-4-neon-medium", 0, True),
         ):
             with self.subTest(model=model, invocation=invocation):
                 proc = subprocess.run(
@@ -215,8 +218,14 @@ class TestPluginBundle(unittest.TestCase):
                 output = json.loads(proc.stdout)
                 self.assertEqual(bool(output.get("injectSteps")), active)
                 if active:
+                    self.assertIn("only when this turn uses Antigravity Orchestrator", proc.stdout)
                     self.assertIn("model=gpt-6.2-sol", proc.stdout)
                     self.assertIn("codex_poll", proc.stdout)
+                    self.assertIn("failing regression before the code change", proc.stdout)
+                    self.assertIn("codex_review", proc.stdout)
+                    self.assertIn("fresh read-only session", proc.stdout)
+                    self.assertIn("host independently runs the agreed acceptance suite once", proc.stdout)
+                    self.assertIn("300-second default", proc.stdout)
 
     def test_scripts_have_executable_permissions(self) -> None:
         for script_name in ("codex_mcp_server.py", "codex_runner.py"):

@@ -23,10 +23,21 @@ VALID_REVIEW_MODES = ("uncommitted", "base", "commit", "custom")
 FALLBACK_CODEX_PATHS = ("/opt/homebrew/bin/codex", "/usr/local/bin/codex")
 PREFLIGHT_TIMEOUT_SECONDS = 5
 DEFAULT_WAIT_SECONDS = 120
-DEFAULT_POLL_WAIT_SECONDS = 30
+DEFAULT_POLL_WAIT_SECONDS = 300
 MAX_WAIT_SECONDS = 600
+MAX_CHANGED_FILES_PREVIEW = 20
 MAX_FINGERPRINT_BYTES = 5 * 1024 * 1024
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+VERIFICATION_REPORT_INSTRUCTIONS = """
+
+For the Bridge receipt, finish with a short summary and a fenced code block
+labeled bridge-verification containing a JSON object with this shape:
+{"verification":[{"command":"exact command run","result":"observed outcome"}],"unverified":["check not run and why"]}
+Report actual checks only. Include expected failures from test-first work and
+label them as expected. Use empty lists where appropriate. If the caller
+requires a different output format, honor that format.
+"""
 
 
 class CodexRunnerError(ValueError):
@@ -402,6 +413,77 @@ def _clamp_wait_seconds(wait_seconds: int | None, *, default: int = DEFAULT_WAIT
     if isinstance(wait_seconds, bool) or not isinstance(wait_seconds, int):
         raise CodexRunnerError(f"wait_seconds must be an integer, got {wait_seconds!r}.")
     return max(0, min(wait_seconds, MAX_WAIT_SECONDS))
+
+
+def _split_verification_report(
+    summary: str,
+) -> tuple[str, list[dict[str, str]], list[str]]:
+    match = re.search(r"(?:^|\n)```bridge-verification\s*\n(.*?)\n```\s*\Z", summary, re.DOTALL)
+    if match is not None:
+        try:
+            report = json.loads(match[1])
+        except json.JSONDecodeError:
+            report = None
+        if isinstance(report, dict):
+            checks = report.get("verification")
+            unverified = report.get("unverified")
+            if (
+                isinstance(checks, list)
+                and all(
+                    isinstance(check, dict)
+                    and all(isinstance(check.get(key), str) and check[key].strip()
+                            for key in ("command", "result"))
+                    for check in checks
+                )
+                and isinstance(unverified, list)
+                and all(isinstance(item, str) and item.strip() for item in unverified)
+            ):
+                verification = [
+                    {"command": check["command"], "result": check["result"]} for check in checks
+                ]
+                return summary[:match.start()].rstrip(), verification, unverified
+    return summary, [], ["Worker did not supply structured verification. See summary and details."]
+
+
+def _preview_text(value: str | None, limit: int) -> str | None:
+    if value is not None and len(value) > limit:
+        return value[:limit].rstrip() + "\n[See details_path for the full text.]"
+    return value
+
+
+def _task_receipt(record: dict[str, Any], task_path: Path) -> dict[str, Any]:
+    """Return a bounded terminal receipt, including for records from older versions."""
+    receipt = {
+        key: record[key] for key in (
+            "status", "task_id", "mode", "session_id", "sandbox", "cwd", "usage",
+            "elapsed_ms", "returncode", "resume_failed", "hint", "review_mode", "routed_via_exec",
+        )
+        if key in record
+    }
+    receipt["details_path"] = str(task_path.resolve())
+    receipt["summary"] = _preview_text(record.get("summary"), 3000)
+    receipt["error"] = _preview_text(record.get("error"), 800)
+
+    if record.get("mode") in ("exec", "resume"):
+        changed_files = record.get("changed_files", [])
+        reedited = record.get("reedited_dirty_files", [])
+        preview = [path for path in changed_files[:MAX_CHANGED_FILES_PREVIEW] if len(path) <= 300]
+        receipt["changed_files"] = preview
+        receipt["changed_files_count"] = len(changed_files)
+        receipt["changed_files_truncated"] = len(preview) < len(changed_files)
+        receipt["pre_existing_dirty_files_count"] = len(record.get("pre_existing_dirty_files", [])) + len(reedited)
+        receipt["reedited_dirty_files_count"] = len(reedited)
+        receipt["diff_stat"] = _preview_text(record.get("diff_stat"), 800)
+        checks = record.get("verification", [])
+        unverified = record.get("unverified", ["Verification was not recorded in this receipt."])
+        receipt["verification"] = [
+            {"command": _preview_text(check["command"], 250), "result": _preview_text(check["result"], 200)}
+            for check in checks[:8]
+        ]
+        receipt["unverified"] = [_preview_text(item, 180) for item in unverified[:6]]
+        if len(checks) > 8 or len(unverified) > 6:
+            receipt["verification_truncated"] = True
+    return receipt
 
 
 def _require_codex_bin() -> str:
@@ -831,7 +913,7 @@ class CodexTaskManager:
                 model=clean_model,
                 reasoning_effort=clean_effort,
                 images=clean_images,
-                prompt=clean_prompt,
+                prompt=clean_prompt + VERIFICATION_REPORT_INSTRUCTIONS,
             )
 
         return self._launch_and_wait(
@@ -996,7 +1078,7 @@ class CodexTaskManager:
         while True:
             record = self._read_persisted_task(task_path)
             if record.get("status") != "running":
-                return record
+                return _task_receipt(record, task_path)
             pid = record.get("pid")
             owner_pid = record.get("owner_pid")
             pid_dead = pid is not None and not _is_pid_alive(pid)
@@ -1004,12 +1086,12 @@ class CodexTaskManager:
             if pid_dead and owner_dead:
                 latest = self._read_persisted_task(task_path)
                 if latest.get("status") != "running":
-                    return latest
+                    return _task_receipt(latest, task_path)
                 failed_record = dict(latest)
                 failed_record["status"] = "failed"
                 failed_record["error"] = "Background task process is no longer running."
                 self._write_task_file(task_path, failed_record)
-                return failed_record
+                return _task_receipt(failed_record, task_path)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return record
@@ -1287,6 +1369,14 @@ class CodexTaskManager:
                 "error": error_msg,
                 "errors": parsed["errors"],
             }
+            if stdout_text or stderr_text:
+                log_dir = (self.tasks_dir / task.task_id).resolve()
+                log_dir.mkdir(mode=0o700)
+                for stream, content in (("stdout", stdout_text), ("stderr", stderr_text)):
+                    if content:
+                        log_path = log_dir / f"{stream}.log"
+                        log_path.write_text(content, encoding="utf-8")
+                        result[f"{stream}_path"] = str(log_path)
             self._attach_mode_fields(
                 task,
                 result,
@@ -1297,9 +1387,8 @@ class CodexTaskManager:
             )
 
             with task.lock:
-                task.result = result
                 task.session_id = session_id
-                self._persist_task_unlocked(task.task_id, result)
+                task.result = self._persist_terminal_result(task.task_id, result)
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - task.start_monotonic) * 1000)
             fallback: dict[str, Any] = {
@@ -1328,8 +1417,7 @@ class CodexTaskManager:
             with task.lock:
                 task.stdout_lines.clear()
                 task.stderr_lines.clear()
-                task.result = fallback
-                self._persist_task_unlocked(task.task_id, fallback)
+                task.result = self._persist_terminal_result(task.task_id, fallback)
         finally:
             for stream in (proc.stdout, proc.stderr):
                 if stream is not None and not stream.closed:
@@ -1356,7 +1444,11 @@ class CodexTaskManager:
         if task.mode in ("exec", "resume"):
             payload["changed_files"] = changed_files
             payload["pre_existing_dirty_files"] = pre_dirty
+            baseline_status = task.baseline["status"] if task.baseline is not None else {}
+            payload["reedited_dirty_files"] = [path for path in changed_files if path in baseline_status]
             payload["diff_stat"] = diff_stat
+            summary, verification, unverified = _split_verification_report(payload["summary"])
+            payload.update(summary=summary, verification=verification, unverified=unverified)
             if task.is_resume and failed:
                 payload["resume_failed"] = True
                 payload["hint"] = (
@@ -1374,11 +1466,23 @@ class CodexTaskManager:
         task_path = self.tasks_dir / f"{task_id}.json"
         self._write_task_file(task_path, payload)
 
+    def _persist_terminal_result(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        task_path = self.tasks_dir / f"{task_id}.json"
+        self._write_task_file(task_path, payload)
+        return _task_receipt(payload, task_path)
+
     def _write_task_file(self, task_path: Path, payload: dict[str, Any]) -> None:
-        self.tasks_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.tasks_dir / f".{task_path.name}.{uuid.uuid4().hex[:8]}.tmp"
-        tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp_path, task_path)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=self.tasks_dir, prefix=f".{task_path.name}.", delete=False
+        ) as handle:
+            tmp_path = Path(handle.name)
+            try:
+                json.dump(payload, handle, indent=2)
+                handle.write("\n")
+                handle.close()
+                os.replace(tmp_path, task_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
 
     def _read_persisted_task(self, task_path: Path) -> dict[str, Any]:
         try:

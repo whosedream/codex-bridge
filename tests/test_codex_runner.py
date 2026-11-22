@@ -317,7 +317,10 @@ class TestCodexTaskManager(unittest.TestCase):
         self.assertEqual(res["session_id"], "thr_fake_001")
         self.assertEqual(res["changed_files"], ["new.txt"])
         self.assertNotIn("pre.txt", res["changed_files"])
-        self.assertEqual(res["pre_existing_dirty_files"], ["pre.txt"])
+        self.assertEqual(res["pre_existing_dirty_files_count"], 1)
+        self.assertNotIn("pre_existing_dirty_files", res)
+        details = json.loads(Path(res["details_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(details["pre_existing_dirty_files"], ["pre.txt"])
         self.assertTrue(res["diff_stat"])
         self.assertIn("new.txt", res["diff_stat"])
         self.assertNotIn("pre.txt", res["diff_stat"])
@@ -337,7 +340,7 @@ class TestCodexTaskManager(unittest.TestCase):
 
         self.assertEqual(res["status"], "completed")
         self.assertEqual(res["changed_files"], ["tracked.txt"])
-        self.assertEqual(res["pre_existing_dirty_files"], ["pre.txt"])
+        self.assertEqual(res["pre_existing_dirty_files_count"], 1)
         self.assertIn("tracked.txt", res["diff_stat"])
         self.assertNotIn("pre.txt", res["diff_stat"])
 
@@ -356,7 +359,48 @@ class TestCodexTaskManager(unittest.TestCase):
 
         self.assertEqual(res["status"], "completed")
         self.assertEqual(res["changed_files"], ["pre.txt"])
-        self.assertEqual(res["pre_existing_dirty_files"], [])
+        self.assertEqual(res["pre_existing_dirty_files_count"], 1)
+        self.assertEqual(res["reedited_dirty_files_count"], 1)
+        details = json.loads(Path(res["details_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(details["pre_existing_dirty_files"], [])
+        self.assertEqual(details["reedited_dirty_files"], ["pre.txt"])
+
+    def test_terminal_receipt_bounds_output_and_retains_full_details(self) -> None:
+        repo = self._init_git_repo("large_receipt_repo")
+        historical = [f"historical-{i:04}.txt" for i in range(250)]
+        changed = [f"changed-{i:04}.txt" for i in range(48)]
+        summary = "Long worker report. " * 500
+        verification = [{"command": "python3 -m unittest", "result": "exit 0, six passed"}]
+        unverified = ["GPU tests require the host."]
+        report = json.dumps({"verification": verification, "unverified": unverified})
+        worker_output = f"{summary}\n\n```bridge-verification\n{report}\n```"
+        diff_stat = "\n".join(f"{name} | 1 +" for name in changed)
+
+        with mock.patch.dict(os.environ, {"FAKE_CODEX_SUMMARY": worker_output}):
+            with mock.patch.object(
+                codex_runner, "_compute_git_delta", return_value=(changed, historical, diff_stat)
+            ):
+                result = self.manager.run_exec(prompt="Summarize verification", cwd=str(repo))
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["changed_files_count"], 48)
+        self.assertEqual(result["changed_files"], changed[:20])
+        self.assertTrue(result["changed_files_truncated"])
+        self.assertEqual(result["pre_existing_dirty_files_count"], 250)
+        self.assertEqual(result["verification"], verification)
+        self.assertEqual(result["unverified"], unverified)
+        self.assertNotIn(historical[0], json.dumps(result))
+        self.assertNotIn("stdout", result)
+        self.assertLess(len(result["summary"]), len(summary))
+        self.assertLess(len(result["diff_stat"]), len(diff_stat))
+
+        details = json.loads(Path(result["details_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(details["changed_files"], changed)
+        self.assertEqual(details["pre_existing_dirty_files"], historical)
+        self.assertEqual(details["summary"], summary.rstrip())
+        self.assertIn("thread.started", Path(details["stdout_path"]).read_text(encoding="utf-8"))
+        another_manager = CodexTaskManager(data_dir=self.data_dir)
+        self.assertEqual(another_manager.poll_task(result["task_id"], wait_seconds=0), result)
 
     def test_run_exec_resume_passes_sandbox_via_config_and_handles_failure(self) -> None:
         repo = self._init_git_repo("resume_repo")
@@ -450,7 +494,7 @@ class TestCodexTaskManager(unittest.TestCase):
                 wait_seconds=30,
             )
             self.assertEqual(async_res["status"], "running")
-            done = self.manager.poll_task(async_res["task_id"], wait_seconds=5)
+            done = self.manager.poll_task(async_res["task_id"])
             self.assertEqual(done["status"], "completed")
 
     def test_run_review_avoids_mutually_exclusive_prompt_with_target(self) -> None:
@@ -688,10 +732,10 @@ class TestCodexTaskManager(unittest.TestCase):
 
         self.assertEqual(res_reedit["status"], "completed")
         self.assertEqual(res_reedit["changed_files"], ["pkg/sub/dirty_untracked.txt"])
-        self.assertEqual(
-            res_reedit["pre_existing_dirty_files"],
-            ["pkg/mod.py", "untouched.txt"],
-        )
+        self.assertEqual(res_reedit["pre_existing_dirty_files_count"], 3)
+        self.assertEqual(res_reedit["reedited_dirty_files_count"], 1)
+        details = json.loads(Path(res_reedit["details_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(details["pre_existing_dirty_files"], ["pkg/mod.py", "untouched.txt"])
         self.assertIsNotNone(res_reedit["diff_stat"])
         self.assertIn("pkg/sub/dirty_untracked.txt | 2 + (untracked)", res_reedit["diff_stat"])
 
@@ -809,7 +853,8 @@ class TestCodexTaskManager(unittest.TestCase):
                 self.assertEqual(argv[0], "exec")
                 self.assertNotEqual(argv[1], "resume")
             sep_idx = argv.index("--")
-            self.assertEqual(argv[sep_idx + 1 :], [prompt])
+            expected_prompt = prompt if idx == 0 else prompt + codex_runner.VERIFICATION_REPORT_INSTRUCTIONS
+            self.assertEqual(argv[sep_idx + 1 :], [expected_prompt])
             self.assertLess(argv.index("img1.png"), sep_idx)
             self.assertLess(argv.index("img2.png"), sep_idx)
 

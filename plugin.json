@@ -2,8 +2,8 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
-  "version": "0.4.0",
-  "description": "Antigravity Orchestrator delegates implementation and testing directly to OpenAI Codex CLI and verifies the results in the primary conversation.",
+  "version": "0.6.0",
+  "description": "Antigravity Orchestrator delegates implementation, development tests, and independent review directly to OpenAI Codex CLI and runs final acceptance in the host.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "Design and implement a new backend feature with Codex (plan first, then build)",

@@ -151,6 +151,7 @@ def _emit_jsonl_finish(
     input_tokens: int = 120,
     output_tokens: int = 45,
 ) -> None:
+    summary = os.environ.get("FAKE_CODEX_SUMMARY", summary)
     if use_json:
         events = [
             {
